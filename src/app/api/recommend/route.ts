@@ -40,34 +40,123 @@ export async function GET(request: Request) {
     }
 
     // ML Predictions
-    const priceResult = predictPrice({
-      cropId,
-      regionId,
-      month,
-      year,
-      historicalPrices: prices.map((p) => ({
-        month: p.month,
-        year: p.year,
-        price: parseFloat(p.price as string),
-      })),
-      historicalDemand: demands.map((d) => ({
-        month: d.month,
-        year: d.year,
-        demand: d.demandLevel,
-      })),
-    });
+    // If local crop+region history is missing, fall back to crop-wide price history
+    // so the UI doesn't return unrealistically low values.
+    const cropWidePrices =
+      prices.length > 1
+        ? prices
+        : (
+          await db
+            .select()
+            .from(priceHistory)
+            .where(and(eq(priceHistory.cropId, cropId)))
+            .orderBy(priceHistory.year, priceHistory.month)
+        );
 
-    const demandResult = classifyDemand({
-      cropId,
-      regionId,
+    const cropWideDemands =
+      demands.length > 1
+        ? demands
+        : (
+          await db
+            .select()
+            .from(demandData)
+            .where(and(eq(demandData.cropId, cropId)))
+            .orderBy(demandData.year, demandData.month)
+        );
+
+    const priceHistoryForModel = cropWidePrices.map((p) => ({
+      month: p.month,
+      year: p.year,
+      price: parseFloat(p.price as string),
+    }));
+    const demandHistoryForModel = cropWideDemands.map((d) => ({
+      month: d.month,
+      year: d.year,
+      demand: d.demandLevel,
+    }));
+
+    // If there isn't enough history to train ML, use DB-driven empirical fallbacks.
+    // This prevents “flat” predictions that don't change across inputs.
+    const priceResult =
+      priceHistoryForModel.length < 2
+        ? (() => {
+          const allPrices = priceHistoryForModel.map((x) => x.price);
+          const overallAvg = allPrices.length ? allPrices.reduce((a, b) => a + b, 0) / allPrices.length : 0;
+
+          const monthPrices = priceHistoryForModel.filter((x) => x.month === month).map((x) => x.price);
+          const monthAvg = monthPrices.length ? monthPrices.reduce((a, b) => a + b, 0) / monthPrices.length : overallAvg;
+
+          // Small trend heuristic based on overall year avg (if possible)
+          const yearGroups = priceHistoryForModel.reduce<Record<number, number[]>>((acc, x) => {
+            acc[x.year] = acc[x.year] || [];
+            acc[x.year].push(x.price);
+            return acc;
+          }, {});
+          const years = Object.keys(yearGroups).map((y) => parseInt(y, 10)).sort((a, b) => a - b);
+          const lastYear = years[years.length - 1] ?? year;
+          const prevYear = years[years.length - 2] ?? lastYear;
+
+          const lastAvg = (yearGroups[lastYear] || []).reduce((a, b) => a + b, 0) / Math.max(1, (yearGroups[lastYear] || []).length);
+          const prevAvg = (yearGroups[prevYear] || []).reduce((a, b) => a + b, 0) / Math.max(1, (yearGroups[prevYear] || []).length);
+          const trendDelta = prevAvg > 0 ? (lastAvg - prevAvg) / prevAvg : 0;
+
+          const seasonBoost = 1 + (calculateSeasonalityScore(month, cropInfo.seasonStart || 1, cropInfo.seasonEnd || 12) - 0.5) * 0.2;
+
+          const basePrice = monthAvg > 0 ? monthAvg : overallAvg > 0 ? overallAvg : 25;
+          const predicted = basePrice * seasonBoost * (1 + trendDelta * 0.2);
+          const predictedRounded = Math.round(Math.max(0.1, predicted) * 100) / 100;
+
+          const trend: "Increasing" | "Stable" | "Decreasing" =
+            predictedRounded > monthAvg * 1.02 ? "Increasing" : predictedRounded < monthAvg * 0.98 ? "Decreasing" : "Stable";
+
+          return { price: predictedRounded, trend };
+        })()
+        : predictPrice({
+          cropId,
+          regionId,
+          month,
+          year,
+          historicalPrices: priceHistoryForModel,
+          historicalDemand: demandHistoryForModel,
+        });
+
+    const seasonalityForDemand = calculateSeasonalityScore(
       month,
-      seasonFactor: calculateSeasonalityScore(month, cropInfo.seasonStart || 1, cropInfo.seasonEnd || 12),
-      historicalDemand: demands.map((d) => ({
-        month: d.month,
-        year: d.year,
-        demand: d.demandLevel,
-      })),
-    });
+      cropInfo.seasonStart || 1,
+      cropInfo.seasonEnd || 12
+    );
+
+    const demandResult =
+      demandHistoryForModel.length < 2
+        ? (() => {
+          const candidates = demandHistoryForModel.filter((x) => x.month === month);
+          const pool = candidates.length ? candidates : demandHistoryForModel;
+
+          const counts: Record<"High" | "Medium" | "Low", number> = { High: 0, Medium: 0, Low: 0 };
+          for (const x of pool) {
+            if (x.demand === "High") counts.High++;
+            else if (x.demand === "Medium") counts.Medium++;
+            else counts.Low++;
+          }
+          const total = Math.max(1, counts.High + counts.Medium + counts.Low);
+          const best = (Object.entries(counts) as [string, number][])
+            .sort((a, b) => b[1] - a[1])[0];
+
+          const level = best[0] as "High" | "Medium" | "Low";
+          const confidence = Math.round(((best[1] / total) * 100)) / 100;
+          return { level, confidence };
+        })()
+        : classifyDemand({
+          cropId,
+          regionId,
+          month,
+          seasonFactor: seasonalityForDemand,
+          historicalDemand: cropWideDemands.map((d) => ({
+            month: d.month,
+            year: d.year,
+            demand: d.demandLevel,
+          })),
+        });
 
     const seasonalityScore = calculateSeasonalityScore(
       month,

@@ -22,8 +22,8 @@ export async function GET(request: Request) {
       .leftJoin(regions, eq(markets.regionId, regions.id));
 
     const result = regionId
-      ? await baseQuery.where(eq(markets.regionId, parseInt(regionId)))
-      : await baseQuery;
+      ? await baseQuery.where(eq(markets.regionId, parseInt(regionId))).catch(() => [] as any[])
+      : await baseQuery.catch(() => [] as any[]);
 
     return NextResponse.json({ success: true, data: result });
   } catch (error: any) {

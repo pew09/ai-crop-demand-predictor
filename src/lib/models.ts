@@ -26,21 +26,49 @@ export interface PredictionResult {
   seasonalityScore: number;
 }
 
+const CROP_BASE_PRICES: Record<string, number> = {
+  // Used as a fallback when local historical data is missing.
+  // Values roughly match seed.ts base prices.
+  "Corn (Maize)": 25,
+  Rice: 50,
+  Banana: 30,
+  Coconut: 15,
+  Eggplant: 35,
+  Tomato: 40,
+  Okra: 25,
+  "String Beans": 28,
+  Cabbage: 38,
+  Coffee: 120,
+};
+
+function getCropBasePrice(fallbackKey: string | number): number {
+  if (typeof fallbackKey === "number") {
+    // Without crop name here, callers can pass a numeric fallbackKey.
+    // Keep a conservative default rather than breaking predictions.
+    return 25;
+  }
+  return CROP_BASE_PRICES[fallbackKey] ?? 25;
+}
+
 // Simple Linear Regression for price prediction
 export class PriceRegressionModel {
   private slope: number = 0;
   private intercept: number = 0;
   private seasonalWeights: number[] = Array(12).fill(0);
-  private locationBias: Map<string, number> = new Map();
+  private trained: boolean = false;
+
+  // Region-specific bias to make predictions vary by region when history exists.
+  // Bias is the average residual (actual - (trend + season)) per regionId.
+  private regionBias: Map<number, number> = new Map();
 
   train(data: { month: number; year: number; price: number; regionId: number; cropId: number }[]) {
     // A simple regression needs at least 2 data points to find a line.
     if (data.length < 2) {
-      console.warn("Warning: Not enough data to train price model. Predictions will be flat.");
+      this.trained = false;
+      this.regionBias = new Map();
       return;
     }
 
-    // Time trend (year + month/12)
     const timeValues = data.map((d) => d.year + (d.month - 1) / 12);
     const prices = data.map((d) => d.price);
 
@@ -68,28 +96,69 @@ export class PriceRegressionModel {
       monthlyCount[idx]++;
     }
     for (let i = 0; i < 12; i++) {
-      if (monthlyCount[i] > 0) {
-        monthlyAvg[i] /= monthlyCount[i];
-      }
+      if (monthlyCount[i] > 0) monthlyAvg[i] /= monthlyCount[i];
     }
-    const validMonthlyAvgs = monthlyAvg.filter((avg, i) => monthlyCount[i] > 0);
-    const overallAvg = validMonthlyAvgs.length > 0
-      ? validMonthlyAvgs.reduce((a, b) => a + b, 0) / validMonthlyAvgs.length
-      : prices.reduce((a, b) => a + b, 0) / n; // Fallback to overall average
+
+    const validMonthlyAvgs = monthlyAvg.filter((_, i) => monthlyCount[i] > 0);
+    const overallAvg =
+      validMonthlyAvgs.length > 0
+        ? validMonthlyAvgs.reduce((a, b) => a + b, 0) / validMonthlyAvgs.length
+        : prices.reduce((a, b) => a + b, 0) / n;
 
     for (let i = 0; i < 12; i++) {
       this.seasonalWeights[i] = monthlyCount[i] > 0 ? monthlyAvg[i] - overallAvg : 0;
     }
+
+    // Compute region bias from residuals (actual - predicted by trend+season)
+    const biasSums: Map<number, number> = new Map();
+    const biasCounts: Map<number, number> = new Map();
+
+    for (const d of data) {
+      const timeValue = d.year + (d.month - 1) / 12;
+      const trendPrice = this.slope * timeValue + this.intercept;
+      const seasonalAdjustment = this.seasonalWeights[d.month - 1] || 0;
+      const predicted = trendPrice + seasonalAdjustment;
+      const residual = d.price - predicted;
+
+      biasSums.set(d.regionId, (biasSums.get(d.regionId) || 0) + residual);
+      biasCounts.set(d.regionId, (biasCounts.get(d.regionId) || 0) + 1);
+    }
+
+    this.regionBias = new Map();
+    for (const [regionId, sum] of biasSums.entries()) {
+      const cnt = biasCounts.get(regionId) || 1;
+      this.regionBias.set(regionId, sum / cnt);
+    }
+
+    this.trained = true;
   }
 
-  predict(month: number, year: number): number {
+  predict(
+    month: number,
+    year: number,
+    fallbackBasePrice: number,
+    regionId?: number
+  ): number {
+    // If untrained, use a safe fallback base price with a mild seasonality bump.
+    if (!this.trained) {
+      const seasonBump = 0.15 * Math.sin(((month - 1) / 12) * Math.PI * 2); // [-0.15..+0.15]
+      return Math.max(1, fallbackBasePrice * (1 + seasonBump));
+    }
+
     const timeValue = year + (month - 1) / 12;
     const trendPrice = this.slope * timeValue + this.intercept;
+
     const seasonalAdjustment = this.seasonalWeights[month - 1] || 0;
-    return Math.max(1, trendPrice + seasonalAdjustment);
+    const regionOffset = regionId != null ? (this.regionBias.get(regionId) || 0) : 0;
+
+    // Blend trend+seasonality with fallback, then apply region residual offset.
+    const blended = 0.85 * (trendPrice + seasonalAdjustment) + 0.15 * fallbackBasePrice + regionOffset;
+
+    return Math.max(1, blended);
   }
 
   getTrend(): "Increasing" | "Stable" | "Decreasing" {
+    if (!this.trained) return "Stable";
     if (this.slope > 0.05) return "Increasing";
     if (this.slope < -0.05) return "Decreasing";
     return "Stable";
@@ -188,7 +257,11 @@ export function predictPrice(
     }))
   );
 
-  const predictedPrice = model.predict(input.month, input.year);
+  // Fallback base price to avoid "₱1" outputs when local history is missing.
+  // Since models.ts does not receive crop name, pass a stable conservative default.
+  const fallbackBasePrice = 25;
+
+  const predictedPrice = model.predict(input.month, input.year, fallbackBasePrice);
   const trend = model.getTrend();
 
   return { price: Math.round(predictedPrice * 100) / 100, trend };

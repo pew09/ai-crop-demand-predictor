@@ -45,25 +45,11 @@ export default function HomePage() {
       bg: "bg-blue-100",
     },
     {
-      icon: Bot,
-      title: "AI Chat Assistant",
-      desc: "Ask questions in simple language: \"Where should I sell my corn?\"",
-      color: "text-purple-600",
-      bg: "bg-purple-100",
-    },
-    {
       icon: Shield,
       title: "Rule-Based Intelligence",
       desc: "Expert farming rules combined with ML for reliable, explainable recommendations",
-      color: "text-red-600",
-      bg: "bg-red-100",
-    },
-    {
-      icon: Database,
-      title: "Admin Analytics",
-      desc: "Upload datasets, manage crops/regions, and view comprehensive analytics",
-      color: "text-teal-600",
-      bg: "bg-teal-100",
+      color: "text-purple-600",
+      bg: "bg-purple-100",
     },
   ];
 
@@ -108,12 +94,7 @@ export default function HomePage() {
                   Start Farming AI
                   <ArrowRight className="ml-2 w-5 h-5" />
                 </Link>
-                <Link
-                  href="/admin"
-                  className="inline-flex items-center px-6 py-3.5 bg-white/10 backdrop-blur-sm text-white font-semibold rounded-xl border border-white/20 hover:bg-white/20 transition-all"
-                >
-                  Admin Panel
-                </Link>
+
               </div>
             </div>
             <div className="hidden lg:block relative animate-slideInRight">
@@ -248,7 +229,7 @@ export default function HomePage() {
               </h3>
               <div className="bg-green-50 rounded-xl p-4 mb-4">
                 <p className="text-gray-700">
-                  🌱 <strong>Ate! Kuya!</strong> For this month ({["January","February","March","April","May","June","July","August","September","October","November","December"][currentMonth-1]}), consider planting crops that match the current season in Cotabato.
+                  🌱 <strong>Ate! Kuya!</strong> For this month ({["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"][currentMonth - 1]}), consider planting crops that match the current season in Cotabato.
                 </p>
               </div>
               <div className="bg-orange-50 rounded-xl p-4">

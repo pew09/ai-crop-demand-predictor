@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect } from "react";
 import {
   Sprout,
   MapPin,
@@ -8,8 +8,6 @@ import {
   TrendingUp,
   ShoppingCart,
   Clock,
-  Bot,
-  Send,
   AlertTriangle,
   CheckCircle2,
   Leaf,
@@ -19,8 +17,6 @@ import {
   Loader2,
   RefreshCw,
   ThumbsUp,
-  MessageCircle,
-  X,
 } from "lucide-react";
 import {
   LineChart,
@@ -30,9 +26,6 @@ import {
   CartesianGrid,
   Tooltip,
   ResponsiveContainer,
-  BarChart,
-  Bar,
-  Legend,
 } from "recharts";
 import Link from "next/link";
 
@@ -93,12 +86,6 @@ interface PredictionResult {
   };
 }
 
-interface ChatMessage {
-  text: string;
-  isUser: boolean;
-  timestamp: Date;
-}
-
 // Sample price trend data for chart
 const generateTrendData = (basePrice: number, trend: string) => {
   const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -121,19 +108,10 @@ export default function FarmerDashboard() {
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<PredictionResult | null>(null);
   const [error, setError] = useState("");
-  const [chatOpen, setChatOpen] = useState(false);
-  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([
-    {
-      text: "👋 Ate! Kuya! I'm your AI farming assistant! Ask me anything about crops, prices, or markets in Cotabato!",
-      isUser: false,
-      timestamp: new Date(),
-    },
-  ]);
-  const [chatInput, setChatInput] = useState("");
-  const [chatLoading, setChatLoading] = useState(false);
-  const chatEndRef = useRef<HTMLDivElement>(null);
   const [trendData, setTrendData] = useState<any[]>([]);
   const [showWelcome, setShowWelcome] = useState(true);
+  const [cropLoading, setCropLoading] = useState(true);
+  const [cropError, setCropError] = useState("");
 
   useEffect(() => {
     fetchCrops();
@@ -141,17 +119,25 @@ export default function FarmerDashboard() {
     fetchMarkets();
   }, []);
 
-  useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [chatMessages]);
-
   const fetchCrops = async () => {
+    setCropLoading(true);
+    setCropError("");
     try {
       const res = await fetch("/api/crops");
       const data = await res.json();
-      if (data.success) setCrops(data.data);
+      if (data.success) {
+        setCrops(data.data);
+        if (data.data.length === 0) {
+          setCropError("No crops in database. Run seed script.");
+        }
+      } else {
+        setCropError(data.error || "API error");
+      }
     } catch (e) {
       console.error("Failed to fetch crops", e);
+      setCropError("Failed to connect to database. Check DATABASE_URL and server.");
+    } finally {
+      setCropLoading(false);
     }
   };
 
@@ -207,42 +193,6 @@ export default function FarmerDashboard() {
     }
   };
 
-  const handleChatSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!chatInput.trim()) return;
-
-    const userMsg = chatInput.trim();
-    setChatMessages((prev) => [...prev, { text: userMsg, isUser: true, timestamp: new Date() }]);
-    setChatInput("");
-    setChatLoading(true);
-
-    try {
-      const res = await fetch("/api/chatbot", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          message: userMsg,
-          crop: result?.crop.name,
-          region: result?.region.name,
-        }),
-      });
-      const data = await res.json();
-      if (data.success) {
-        setChatMessages((prev) => [
-          ...prev,
-          { text: data.data.response, isUser: false, timestamp: new Date(data.data.timestamp) },
-        ]);
-      }
-    } catch (e) {
-      setChatMessages((prev) => [
-        ...prev,
-        { text: "Sorry, I couldn't process that. Please try again.", isUser: false, timestamp: new Date() },
-      ]);
-    } finally {
-      setChatLoading(false);
-    }
-  };
-
   const getRiskBadge = (risk: string) => {
     const styles: Record<string, string> = {
       Low: "risk-low",
@@ -266,21 +216,12 @@ export default function FarmerDashboard() {
   return (
     <div className="max-w-7xl mx-auto px-4 py-8">
       {/* Header */}
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-8 gap-4">
-        <div>
-          <h1 className="text-3xl font-bold text-gray-900 flex items-center">
-            <Sprout className="w-8 h-8 mr-3 text-green-600" />
-            Farmer Dashboard
-          </h1>
-          <p className="text-gray-600 mt-1">AI-powered crop analysis for Cotabato farmers</p>
-        </div>
-        <button
-          onClick={() => setChatOpen(!chatOpen)}
-          className="btn-primary flex items-center space-x-2"
-        >
-          <MessageCircle className="w-5 h-5" />
-          <span>AI Chat Assistant</span>
-        </button>
+      <div className="mb-8">
+        <h1 className="text-3xl font-bold text-gray-900 flex items-center">
+          <Sprout className="w-8 h-8 mr-3 text-green-600" />
+          Farmer Dashboard
+        </h1>
+        <p className="text-gray-600 mt-1">AI-powered crop analysis for Cotabato farmers</p>
       </div>
 
       <div className="grid lg:grid-cols-3 gap-8">
@@ -299,14 +240,24 @@ export default function FarmerDashboard() {
                   value={selectedCrop}
                   onChange={(e) => setSelectedCrop(e.target.value)}
                   className="input-field"
+                  disabled={cropLoading}
                 >
-                  <option value="">Select crop...</option>
-                  {crops.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.name}
-                    </option>
-                  ))}
+                  <option value="">
+                    {cropLoading ? "Loading crops..." : cropError ? cropError : "Select crop..."}
+                  </option>
+                  {!cropLoading && !cropError &&
+                    crops.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name}
+                      </option>
+                    ))}
                 </select>
+                {cropError && (
+                  <div className="mt-1 p-2 bg-red-50 border border-red-200 rounded-lg text-xs text-red-800 flex items-center">
+                    <AlertTriangle className="w-3 h-3 mr-1 flex-shrink-0" />
+                    {cropError}
+                  </div>
+                )}
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Your Location</label>
@@ -354,7 +305,7 @@ export default function FarmerDashboard() {
                 </>
               ) : (
                 <>
-                  <Bot className="w-5 h-5 mr-2" />
+                  <TrendingUp className="w-5 h-5 mr-2" />
                   Get AI Recommendation
                 </>
               )}
@@ -445,10 +396,9 @@ export default function FarmerDashboard() {
                     {result.mlPredictions.demandLevel}
                   </div>
                   <div className="text-sm text-gray-500">Demand Level</div>
-                  <div className={`mt-1 text-xs font-medium ${
-                    result.mlPredictions.demandLevel === "High" ? "text-green-600" :
+                  <div className={`mt-1 text-xs font-medium ${result.mlPredictions.demandLevel === "High" ? "text-green-600" :
                     result.mlPredictions.demandLevel === "Medium" ? "text-orange-600" : "text-red-600"
-                  }`}>
+                    }`}>
                     {Math.round(result.mlPredictions.demandConfidence * 100)}% confidence
                   </div>
                 </div>
@@ -555,11 +505,10 @@ export default function FarmerDashboard() {
                   {markets.map((m) => (
                     <div
                       key={m.id}
-                      className={`p-3 rounded-xl border transition-all ${
-                        m.name === result.market.bestMarket
-                          ? "border-green-500 bg-green-50 shadow-sm"
-                          : "border-gray-200 hover:border-green-300"
-                      }`}
+                      className={`p-3 rounded-xl border transition-all ${m.name === result.market.bestMarket
+                        ? "border-green-500 bg-green-50 shadow-sm"
+                        : "border-gray-200 hover:border-green-300"
+                        }`}
                     >
                       <div className="flex items-start space-x-2">
                         <Store className={`w-4 h-4 mt-0.5 ${m.name === result.market.bestMarket ? "text-green-600" : "text-gray-400"}`} />
@@ -605,7 +554,7 @@ export default function FarmerDashboard() {
               <div className="flex justify-between text-sm">
                 <span className="text-gray-600">Current Month:</span>
                 <span className="font-semibold text-gray-900">
-                  {["January","February","March","April","May","June","July","August","September","October","November","December"][new Date().getMonth()]}
+                  {["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"][new Date().getMonth()]}
                 </span>
               </div>
             </div>
@@ -626,10 +575,10 @@ export default function FarmerDashboard() {
                   <span className="text-sm font-medium text-gray-900">{item.crop}</span>
                   <div className="flex items-center space-x-2">
                     <span className="text-xs text-gray-500">{item.season}</span>
-                    <span className={`w-2 h-2 rounded-full ${
-                      item.status === "harvest" ? "bg-green-500" :
-                      item.status === "planting" ? "bg-blue-500" : "bg-yellow-500"
-                    }`} />
+                    <span className="w-2 h-2 rounded-full ${
+                      item.status === 'harvest' ? 'bg-green-500' :
+                      item.status === 'planting' ? 'bg-blue-500' : 'bg-yellow-500'
+                    }" />
                   </div>
                 </div>
               ))}
@@ -665,88 +614,7 @@ export default function FarmerDashboard() {
           </div>
         </div>
       </div>
-
-      {/* Chatbot Floating Panel */}
-      {chatOpen && (
-        <div className="fixed bottom-4 right-4 w-80 sm:w-96 z-50 animate-slideInRight">
-          <div className="bg-white rounded-2xl shadow-2xl border border-green-200 overflow-hidden">
-            {/* Header */}
-            <div className="bg-gradient-to-r from-green-600 to-green-700 p-4 text-white flex items-center justify-between">
-              <div className="flex items-center space-x-2">
-                <Bot className="w-5 h-5" />
-                <div>
-                  <div className="font-semibold text-sm">AI Farming Assistant</div>
-                  <div className="text-xs text-green-200">Ask me anything!</div>
-                </div>
-              </div>
-              <button onClick={() => setChatOpen(false)} className="hover:bg-green-500/30 p-1 rounded-lg transition-all">
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-            {/* Messages */}
-            <div className="h-72 overflow-y-auto p-4 space-y-3 bg-gray-50">
-              {chatMessages.map((msg, i) => (
-                <div key={i} className={`flex ${msg.isUser ? "justify-end" : "justify-start"} animate-fadeIn`}>
-                  <div
-                    className={`max-w-[85%] p-3 rounded-2xl text-sm ${
-                      msg.isUser
-                        ? "bg-green-600 text-white rounded-br-lg"
-                        : "bg-white text-gray-800 shadow-sm rounded-bl-lg border border-gray-100"
-                    }`}
-                  >
-                    <div className="whitespace-pre-wrap">{msg.text}</div>
-                    <div className={`text-xs mt-1 ${msg.isUser ? "text-green-200" : "text-gray-400"}`}>
-                      {msg.timestamp.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-                    </div>
-                  </div>
-                </div>
-              ))}
-              {chatLoading && (
-                <div className="flex justify-start animate-fadeIn">
-                  <div className="bg-white p-3 rounded-2xl shadow-sm border border-gray-100">
-                    <div className="flex space-x-1">
-                      <div className="w-2 h-2 bg-green-500 rounded-full animate-bounce" style={{ animationDelay: "0s" }} />
-                      <div className="w-2 h-2 bg-green-500 rounded-full animate-bounce" style={{ animationDelay: "0.2s" }} />
-                      <div className="w-2 h-2 bg-green-500 rounded-full animate-bounce" style={{ animationDelay: "0.4s" }} />
-                    </div>
-                  </div>
-                </div>
-              )}
-              <div ref={chatEndRef} />
-            </div>
-            {/* Input */}
-            <form onSubmit={handleChatSubmit} className="p-3 border-t border-gray-100 bg-white">
-              <div className="flex space-x-2">
-                <input
-                  type="text"
-                  value={chatInput}
-                  onChange={(e) => setChatInput(e.target.value)}
-                  placeholder="Ask about crops, prices, markets..."
-                  className="flex-1 px-3 py-2 text-sm border border-gray-200 rounded-xl focus:outline-none focus:border-green-400"
-                  disabled={chatLoading}
-                />
-                <button
-                  type="submit"
-                  disabled={chatLoading || !chatInput.trim()}
-                  className="bg-green-600 text-white p-2 rounded-xl hover:bg-green-700 transition-all disabled:opacity-50"
-                >
-                  <Send className="w-4 h-4" />
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* Show chat button when closed */}
-      {!chatOpen && (
-        <button
-          onClick={() => setChatOpen(true)}
-          className="fixed bottom-4 right-4 z-50 bg-gradient-to-r from-green-600 to-green-700 text-white p-4 rounded-full shadow-lg hover:shadow-xl transition-all animate-pulse-glow"
-        >
-          <MessageCircle className="w-6 h-6" />
-        </button>
-      )}
     </div>
   );
 }
+

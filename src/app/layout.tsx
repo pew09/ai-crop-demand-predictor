@@ -41,12 +41,7 @@ export default function RootLayout({
                 >
                   Farmer Dashboard
                 </Link>
-                <Link
-                  href="/admin"
-                  className="px-3 py-2 text-sm font-medium text-gray-600 hover:text-green-700 hover:bg-green-50 rounded-lg transition-all"
-                >
-                  Admin
-                </Link>
+
               </div>
             </div>
           </div>
